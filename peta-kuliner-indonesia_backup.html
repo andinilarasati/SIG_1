@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Peta Kuliner Indonesia</title>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <!-- Marker color icons (small set) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+  <!-- Simple styling -->
+  <style>
+    html,body,#map { height:100%; margin:0; padding:0; }
+    #map { position:relative; }
+
+    /* Header title overlay - does NOT change map height */
+    #title {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      background: rgba(255,255,255,0.9);
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 700;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+      pointer-events: none; /* allows clicks through to map */
+    }
+
+    /* Controls container */
+    .controls {
+      position: absolute;
+      top: 60px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255,255,255,0.95);
+      padding: 8px;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+      width: 300px;
+      font-size: 14px;
+    }
+
+    .controls label { display:block; font-size:12px; margin-top:6px; }
+    .controls input[type="text"], .controls select { width:100%; padding:6px; margin-top:4px; border-radius:4px; border:1px solid #ccc }
+    .controls button { margin-top:8px; width:100%; padding:8px; border-radius:6px; border:0; background:#1976d2; color:white; cursor:pointer }
+
+    /* Legend box - will be inserted via leaflet control but styled here */
+    .legend-box { background: rgba(255,255,255,0.95); padding:8px; border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,0.15); }
+    .legend-row { display:flex;align-items:center;margin-bottom:6px }
+    .legend-swatch { width:16px;height:16px;border-radius:3px;margin-right:8px }
+
+    /* Treemap modal */
+    #treemapModal {
+      position: absolute;
+      top: 10%; left: 50%; transform: translateX(-50%);
+      width: 90%; max-width:1000px; height: 75%;
+      z-index: 1200; background:white; border-radius:8px; box-shadow:0 6px 30px rgba(0,0,0,0.25);
+      display:none; overflow:hidden; }
+    #treemapModal header { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #eee }
+    #treemapModal .body { padding:6px; height: calc(100% - 48px); }
+    #treemapClose { background:transparent; border:0; font-size:18px; cursor:pointer }
+
+    /* Compact results list for search */
+    #results { max-height:160px; overflow:auto; margin-top:6px; }
+    .result-item { padding:6px; border-bottom:1px solid #efefef; cursor:pointer }
+    .result-item:hover { background:#f5f5f5 }
+
+    /* Floating treemap button */
+    #treemapBtn { position:absolute; top: 10px; right: 10px; z-index:1000; background:#ff7043; color:white; padding:10px 12px; border-radius:6px; border:0; cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,0.15) }
+
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+<div id="title">Peta Kuliner Indonesia</div>
+
+<div class="controls" id="controls">
+  <label for="search">Cari nama makanan atau daerah</label>
+  <input id="search" type="text" placeholder="Contoh: Rendang, Padang, Gudeg..." />
+  <div id="results"></div>
+
+  <label for="regionSelect">Filter berdasarkan daerah</label>
+  <select id="regionSelect"><option value="">-- Semua Daerah --</option></select>
+
+  <label for="typeSelect">Filter berdasarkan jenis</label>
+  <select id="typeSelect"><option value="">-- Semua Jenis --</option></select>
+
+  <button id="resetBtn">Reset filter & zoom</button>
+</div>
+
+<button id="treemapBtn">Open Treemap</button>
+
+<!-- Treemap modal -->
+<div id="treemapModal" aria-hidden="true">
+  <header>
+    <strong>Treemap — Peta Kuliner Indonesia</strong>
+    <div>
+      <button id="treemapClose">✕</button>
+    </div>
+  </header>
+  <div class="body">
+    <svg id="treemapSvg" width="100%" height="100%"></svg>
+  </div>
+</div>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- D3 for treemap -->
+<script src="https://d3js.org/d3.v7.min.js"></script>
+
+<script>
+// ---------- Dataset: curated examples (bukan semua jenis, tetapi cakupan provinsi utama) ----------
+const data = [
+  { name: 'Rendang', region: 'Padang, Sumatera Barat', type: 'Main Course', coords: [-0.94708,100.41718], note: 'Rendang Padang klasik — rekomendasi: rumah makan Padang tradisional.' },
+  { name: 'Sate Padang', region: 'Padang, Sumatera Barat', type: 'Street Food', coords: [-0.94708,100.41718], note: 'Biasanya disajikan dengan kuah kental pedas.' },
+  { name: 'Dendeng Balado', region: 'Padang, Sumatera Barat', type: 'Side Dish', coords: [-0.94708,100.41718], note: 'Daging tipis renyah dengan sambal balado.' },
+  { name: 'Pempek', region: 'Palembang, Sumatera Selatan', type: 'Snack', coords: [-2.99093,104.75655], note: 'Pempek kapal selam, enak dengan cuko.' },
+  { name: 'Martabak Manis', region: 'Jakarta', type: 'Dessert', coords: [-6.20876,106.8456], note: 'Banyak varian, cocok untuk makanan penutup.' },
+  { name: 'Nasi Goreng', region: 'Jakarta', type: 'Street Food', coords: [-6.20876,106.8456], note: 'Hidangan nasional, banyak varian kota.' },
+  { name: 'Soto Betawi', region: 'Jakarta', type: 'Soup', coords: [-6.20876,106.8456], note: 'Kuah gurih dengan santan dan empuk daging sapi.' },
+  { name: 'Kerak Telor', region: 'Jakarta (Betawi)', type: 'Street Food', coords: [-6.20876,106.8456], note: 'Khas Betawi, sering hadir di festival-malam.' },
+  { name: 'Gado-Gado', region: 'Jakarta / Jawa Barat', type: 'Salad', coords: [-6.20876,106.8456], note: 'Sayur rebus dengan saus kacang.' },
+  { name: 'Sate Madura', region: 'Madura / Surabaya', type: 'Street Food', coords: [-7.033,113.8846], note: 'Sate khas Madura, bumbu kacang khas.' },
+  { name: 'Rawon', region: 'Surabaya, Jawa Timur', type: 'Soup', coords: [-7.25747,112.75209], note: 'Kuah hitam khas dengan kluwek.' },
+  { name: 'Rujak Cingur', region: 'Surabaya, Jawa Timur', type: 'Salad', coords: [-7.25747,112.75209], note: 'Campuran buah, sayur, dan potongan cingur.' },
+  { name: 'Lontong Balap', region: 'Surabaya, Jawa Timur', type: 'Street Food', coords: [-7.25747,112.75209], note: 'Lontong dengan tauge, lentho, dan saus kacang.' },
+  { name: 'Bakso Malang', region: 'Malang, Jawa Timur', type: 'Street Food', coords: [-7.9797,112.6309], note: 'Bakso kenyal khas Malang.' },
+  { name: 'Soto Lamongan', region: 'Lamongan, Jawa Timur', type: 'Soup', coords: [-7.1241,112.4111], note: 'Soto ayam dengan koya (bubuk bawang+kacang).' },
+  { name: 'Gudeg', region: 'Yogyakarta', type: 'Main Course', coords: [-7.79558,110.36949], note: 'Nangka muda manis, khas Yogyakarta.' },
+  { name: 'Nasi Liwet', region: 'Surakarta (Solo), Jawa Tengah', type: 'Main Course', coords: [-7.5656,110.8317], note: 'Nasi dengan santan dan lauk tradisional.' },
+  { name: 'Soto Kudus', region: 'Kudus, Jawa Tengah', type: 'Soup', coords: [-6.8110,110.8262], note: 'Soto berbahan daging sapi/ayam khas Kudus.' },
+  { name: 'Empal Gentong', region: 'Cirebon, Jawa Barat', type: 'Soup', coords: [-6.7320,108.5522], note: 'Sup daging dengan kuah khas, kerak aroma asap.' },
+  { name: 'Asinan Bogor', region: 'Bogor, Jawa Barat', type: 'Snack', coords: [-6.5975,106.7998], note: 'Asinan buah atau sayur khas Bogor.' },
+  { name: 'Batagor', region: 'Bandung, Jawa Barat', type: 'Snack', coords: [-6.9175,107.6191], note: 'Bakso tahu goreng, saus kacang.' },
+  { name: 'Siomay Bandung', region: 'Bandung, Jawa Barat', type: 'Snack', coords: [-6.9175,107.6191], note: 'Siomay ikan disajikan dengan saus kacang.' },
+  { name: 'Mie Kocok', region: 'Bandung, Jawa Barat', type: 'Noodle', coords: [-6.9175,107.6191], note: 'Mi khas Bandung dengan kaldu sapi.' },
+  { name: 'Sate Maranggi', region: 'Purwakarta / Cianjur, Jawa Barat', type: 'Street Food', coords: [-6.8217,107.1549], note: 'Sate berbumbu khas Sunda.' },
+  { name: 'Nasi Padang', region: 'Padang, Sumatera Barat', type: 'Main Course', coords: [-0.94708,100.41718], note: 'Hidangan prasmanan khas Minang.' },
+  { name: 'Ikan Bakar Jimbaran', region: 'Jimbaran, Bali', type: 'Main Course', coords: [-8.7890,115.1677], note: 'Ikan bakar di tepi pantai Jimbaran.' },
+  { name: 'Ayam Betutu', region: 'Bali (Gianyar/Bali)', type: 'Main Course', coords: [-8.5191,115.2630], note: 'Ayam berbumbu khas Bali, dimasak lama.' },
+  { name: 'Babi Guling', region: 'Bali', type: 'Main Course', coords: [-8.6705,115.2126], note: 'Babi guling khas Bali (termasuk untuk wisata kuliner).' },
+  { name: 'Sate Lilit', region: 'Bali', type: 'Street Food', coords: [-8.6705,115.2126], note: 'Sate cincang dicampur bumbu dan kelapa.' },
+  { name: 'Ayam Taliwang', region: 'Mataram, Lombok (NTB)', type: 'Main Course', coords: [-8.5837,116.3200], note: 'Ayam pedas khas Taliwang, Lombok.' },
+  { name: 'Plecing Kangkung', region: 'Lombok, NTB', type: 'Side Dish', coords: [-8.5837,116.3200], note: 'Sayur kangkung pedas khas Lombok.' },
+  { name: 'Papeda', region: 'Papua (Jayapura)', type: 'Main Course', coords: [-2.5330,140.7181], note: 'Bubur sagu khas Papua, biasa disantap dengan ikan kuah kuning.' },
+  { name: 'Ikan Kuah Kuning', region: 'Ambon, Maluku', type: 'Main Course', coords: [-3.6950,128.1813], note: 'Ikan dengan kuah kunyit khas Ambon.' },
+  { name: 'Tinutuan (Bubur Manado)', region: 'Manado, Sulawesi Utara', type: 'Main Course', coords: [1.4788,124.8429], note: 'Bubur saring sayur, favorit untuk sarapan.' },
+  { name: 'Cakalang Fufu', region: 'Manado, Sulawesi Utara', type: 'Seafood', coords: [1.4788,124.8429], note: 'Ikan cakalang asap khas Manado.' },
+  { name: 'Coto Makassar', region: 'Makassar, Sulawesi Selatan', type: 'Soup', coords: [-5.1477,119.4327], note: 'Sup daging khas Makassar.' },
+  { name: 'Konro', region: 'Makassar / Toraja, Sulawesi Selatan', type: 'Main Course', coords: [-5.1477,119.4327], note: 'Iga bakar/kuah bumbu pekat.' },
+  { name: 'Otak-otak', region: 'Palembang / Bangka', type: 'Snack', coords: [-2.99093,104.75655], note: 'Terbuat dari ikan dan bumbu, dibungkus daun pisang & bakar.' },
+  { name: 'Kerupuk Kemplang', region: 'Palembang', type: 'Snack', coords: [-2.99093,104.75655], note: 'Krupuk ikan khas Palembang.' },
+  { name: 'Kue Lapis / Bingka', region: 'Ambon / Maluku', type: 'Dessert', coords: [-3.6950,128.1813], note: 'Kue tradisional khas Maluku.' },
+  { name: 'Soto Banjar', region: 'Banjarmasin, Kalimantan Selatan', type: 'Soup', coords: [-3.3267,114.5906], note: 'Soto khas Banjar dengan kuah bening bercita rasa manis-rempah.' }
+];
+
+// Basic color mapping for types
+const typeColors = {
+  'Main Course':'#e53935',
+  'Street Food':'#fb8c00',
+  'Snack':'#8e24aa',
+  'Dessert':'#6d4c41',
+  'Soup':'#1e88e5',
+  'Salad':'#43a047',
+  'Noodle':'#fdd835',
+  'Seafood':'#00acc1',
+  'Side Dish':'#9e9e9e'
+};
+
+// Create map
+const map = L.map('map', {center:[-2.5,118], zoom:5});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+// Icons (colored PNGs from a public repo) - simple approach
+const iconBase = 'https://cdn.jsdelivr.net/gh/pointhi/leaflet-color-markers@master/img/';
+const colorMap = {
+  'Main Course': 'marker-icon-red.png',
+  'Street Food': 'marker-icon-orange.png',
+  'Snack': 'marker-icon-violet.png',
+  'Dessert': 'marker-icon-grey.png',
+  'Soup': 'marker-icon-blue.png',
+  'Salad': 'marker-icon-green.png',
+  'Noodle': 'marker-icon-yellow.png',
+  'Seafood': 'marker-icon-black.png',
+  'Side Dish': 'marker-icon-green.png'
+};
+
+function makeIcon(type){
+  const file = colorMap[type] || 'marker-icon-red.png';
+  return L.icon({
+    iconUrl: iconBase + file,
+    iconSize: [25,41],
+    iconAnchor: [12,41],
+    popupAnchor: [1,-34],
+    shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
+  });
+}
+
+// Marker storage
+const markers = {};
+const markerGroup = L.layerGroup().addTo(map);
+
+function addMarkers(list){
+  markerGroup.clearLayers();
+  list.forEach(item => {
+    const m = L.marker(item.coords, { icon: makeIcon(item.type) });
+    const html = `<strong>${item.name}</strong><br><em>${item.region}</em><br>${item.type}<br><small>${item.note || ''}</small>`;
+    m.bindPopup(html);
+    m.on('click', ()=>{ /* additional actions if needed */ });
+    m.addTo(markerGroup);
+    markers[item.name] = m;
+  });
+}
+
+// initial add
+addMarkers(data);
+
+// Populate filters
+const regionSelect = document.getElementById('regionSelect');
+const typeSelect = document.getElementById('typeSelect');
+const regions = Array.from(new Set(data.map(d=>d.region))).sort();
+const types = Array.from(new Set(data.map(d=>d.type))).sort();
+regions.forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=r; regionSelect.appendChild(o); });
+types.forEach(t=>{ const o=document.createElement('option'); o.value=t; o.textContent=t; typeSelect.appendChild(o); });
+
+// Search & results
+const searchEl = document.getElementById('search');
+const resultsEl = document.getElementById('results');
+
+searchEl.addEventListener('input', ()=>{
+  const q = searchEl.value.trim().toLowerCase();
+  resultsEl.innerHTML = '';
+  if(!q) return;
+  const hits = data.filter(d => d.name.toLowerCase().includes(q) || d.region.toLowerCase().includes(q));
+  hits.slice(0,20).forEach(h=>{
+    const div = document.createElement('div');
+    div.className='result-item';
+    div.innerHTML = `<strong>${h.name}</strong><br><small>${h.region} — ${h.type}</small>`;
+    div.addEventListener('click', ()=>{ map.setView(h.coords, 13); markers[h.name].openPopup(); resultsEl.innerHTML=''; searchEl.value=''; });
+    resultsEl.appendChild(div);
+  });
+});
+
+// Filter behavior
+function applyFilters(){
+  const r = regionSelect.value;
+  const t = typeSelect.value;
+  const filtered = data.filter(d => (r? d.region===r:true) && (t? d.type===t:true));
+  addMarkers(filtered);
+  if(filtered.length) map.fitBounds(filtered.map(f=>f.coords), {padding:[40,40]});
+}
+regionSelect.addEventListener('change', applyFilters);
+typeSelect.addEventListener('change', applyFilters);
+
+// Reset
+document.getElementById('resetBtn').addEventListener('click', ()=>{ regionSelect.value=''; typeSelect.value=''; addMarkers(data); map.setView([-2.5,118],5); });
+
+// Legend as Leaflet control
+L.control({position:'bottomright'}).onAdd = function(){
+  const div = L.DomUtil.create('div','legend-box');
+  div.innerHTML = '<strong>Legenda</strong><br/>';
+  for(const [k,v] of Object.entries(typeColors)){
+    const row = document.createElement('div'); row.className='legend-row';
+    const sw = document.createElement('div'); sw.className='legend-swatch'; sw.style.background = v;
+    const lab = document.createElement('div'); lab.textContent = k; lab.style.fontSize='13px';
+    row.appendChild(sw); row.appendChild(lab); div.appendChild(row);
+  }
+  return div;
+}.addTo(map);
+
+// TREEMAP (D3) - data grouped by region
+function buildTreemap(){
+  const grouped = {};
+  data.forEach(d=>{
+    if(!grouped[d.region]) grouped[d.region]=[];
+    grouped[d.region].push({name:d.name, value:1});
+  });
+  const root = { name:'Indonesia', children: Object.keys(grouped).map(region=>({ name:region, children: grouped[region] })) };
+
+  // draw treemap
+  const svg = d3.select('#treemapSvg');
+  svg.selectAll('*').remove();
+  const width = document.querySelector('#treemapModal .body').clientWidth;
+  const height = document.querySelector('#treemapModal .body').clientHeight;
+  svg.attr('viewBox', `0 0 ${width} ${height}`);
+  const treemapLayout = d3.treemap().size([width, height]).paddingInner(2);
+  const rootNode = d3.hierarchy(root).sum(d=>d.value);
+  treemapLayout(rootNode);
+
+  const nodes = svg.selectAll('g').data(rootNode.leaves()).enter().append('g')
+    .attr('transform', d => `translate(${d.x0},${d.y0})`);
+
+  nodes.append('rect')
+    .attr('width', d => Math.max(0,d.x1-d.x0))
+    .attr('height', d => Math.max(0,d.y1-d.y0))
+    .attr('fill', d => {
+      // color by parent region hash
+      const h = d.parent.data.name.length * 37 % 360; return `hsl(${h},70%,60%)`;
+    })
+    .attr('stroke', '#ffffff')
+    .style('cursor','pointer')
+    .on('click', (event,d)=>{
+      const name = d.data.name;
+      const item = data.find(x=>x.name===name);
+      if(item){ map.setView(item.coords, 12); markers[item.name].openPopup(); closeTreemap(); }
+    });
+
+  nodes.append('text')
+    .attr('x',4).attr('y',14)
+    .style('font-size','12px')
+    .style('pointer-events','none')
+    .text(d => d.data.name);
+}
+
+// modal open/close
+const treemapModal = document.getElementById('treemapModal');
+const treemapBtn = document.getElementById('treemapBtn');
+const treemapClose = document.getElementById('treemapClose');
+function openTreemap(){ treemapModal.style.display='block'; treemapModal.setAttribute('aria-hidden','false'); buildTreemap(); }
+function closeTreemap(){ treemapModal.style.display='none'; treemapModal.setAttribute('aria-hidden','true'); }
+treemapBtn.addEventListener('click', openTreemap);
+treemapClose.addEventListener('click', closeTreemap);
+
+// Close modal if click outside (optional)
+window.addEventListener('click', (e)=>{ if(e.target===treemapModal) closeTreemap(); });
+
+// Accessibility: allow ESC to close
+window.addEventListener('keydown', (e)=>{ if(e.key==="Escape") closeTreemap(); });
+
+// Fit map initially to markers bounds
+if(data.length) map.fitBounds(data.map(d=>d.coords), {padding:[50,50]});
+
+// Helpful: click map to clear search results
+map.on('click', ()=>{ resultsEl.innerHTML=''; searchEl.value=''; });
+
+</script>
+</body>
+</html>

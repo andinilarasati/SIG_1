@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Peta Kuliner Indonesia</title>
+
+  <!-- Bootstrap (UI) -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+  <!-- FontAwesome (ikon) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+
+  <style>
+    html,body,#map { height:100%; margin:0; padding:0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+    #map { position:relative; }
+
+    /* Title overlay - tidak merubah tinggi peta */
+    #title {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1100;
+      background: linear-gradient(90deg,#ffffffcc,#f8f9facc);
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-weight:700;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+      pointer-events: none;
+      color:#212529;
+    }
+
+    /* Controls card */
+    .controls {
+      position: absolute;
+      top: 70px;
+      left: 12px;
+      z-index: 1100;
+      width: 340px;
+      max-height: calc(100% - 100px);
+      overflow:auto;
+      padding: 0.75rem;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.95);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+    }
+
+    .controls .form-control, .controls .form-select { height: calc(1.6rem + 12px); }
+
+    #results { max-height:140px; overflow:auto; margin-top:6px; }
+    .result-item { padding:6px; border-bottom:1px solid #efefef; cursor:pointer }
+    .result-item:hover { background:#f8f9fa; }
+
+    /* Legend */
+    .legend-box { background: rgba(255,255,255,0.96); padding:8px; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.08); }
+    .legend-row { display:flex;align-items:center;margin-bottom:6px; gap:8px }
+    .legend-swatch { width:16px;height:16px;border-radius:3px;flex:0 0 16px }
+
+    /* Treemap modal */
+    #treemapModal {
+      position: absolute;
+      top: 8%; left: 50%; transform: translateX(-50%);
+      width: 92%; max-width:1100px; height: 78%;
+      z-index: 1200; background:white; border-radius:8px; box-shadow:0 8px 40px rgba(0,0,0,0.18);
+      display:none; overflow:hidden;
+    }
+    #treemapModal header { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #eee }
+    #treemapModal .body { padding:6px; height: calc(100% - 48px); }
+    #treemapClose { background:transparent; border:0; font-size:18px; cursor:pointer }
+
+    /* Floating add & treemap buttons */
+    #treemapBtn, #addFloating {
+      position:absolute; top:12px; right:12px; z-index:1100;
+      border-radius:10px; padding:10px 14px; box-shadow:0 6px 18px rgba(0,0,0,0.12);
+      border:0; color:white; cursor:pointer;
+    }
+    #addFloating { right:120px; background: #0d6efd; }
+    #treemapBtn { background: #ff7043; }
+
+    /* Modal form small adjustments */
+    .modal-body .form-label { font-size:0.86rem; }
+    .small-note { font-size:0.82rem; color:#6c757d; }
+
+    @media (max-width:700px){
+      .controls { width: 92%; left: 50%; transform: translateX(-50%); top:80px; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="map"></div>
+<div id="title">Peta Kuliner Indonesia</div>
+
+<div class="controls shadow-sm">
+  <div class="mb-2 d-flex gap-2 align-items-center">
+    <input id="search" class="form-control form-control-sm" type="text" placeholder="Cari: Rendang, Padang, Gudeg..." />
+    <button id="clearSearch" class="btn btn-outline-secondary btn-sm" title="Bersihkan"><i class="fa fa-xmark"></i></button>
+  </div>
+  <div id="results" class="mb-2"></div>
+
+  <div class="mb-2">
+    <label class="form-label small mb-1">Filter Daerah</label>
+    <select id="regionSelect" class="form-select form-select-sm"><option value="">-- Semua Daerah --</option></select>
+  </div>
+  <div class="mb-2">
+    <label class="form-label small mb-1">Filter Jenis</label>
+    <select id="typeSelect" class="form-select form-select-sm"><option value="">-- Semua Jenis --</option></select>
+  </div>
+
+  <div class="d-grid gap-2">
+    <button id="showAddBtn" class="btn btn-primary btn-sm">+ Tambah Kuliner</button>
+    <button id="pickCoordsBtn" class="btn btn-outline-primary btn-sm">Pick coords pada peta</button>
+    <button id="resetBtn" class="btn btn-outline-secondary btn-sm">Reset filter & zoom</button>
+  </div>
+
+  <hr class="my-2" />
+  <div id="legendContainer"></div>
+  <div class="small-note mt-2">Tip: klik marker untuk melihat detail dan opsi Edit/Hapus.</div>
+</div>
+
+<button id="addFloating" title="Tambah Kuliner"><i class="fa fa-plus"></i></button>
+<button id="treemapBtn" title="Open Treemap"><i class="fa fa-chart-tree-map"></i></button>
+
+<!-- Treemap modal -->
+<div id="treemapModal" aria-hidden="true">
+  <header>
+    <strong style="font-size:16px">Treemap — Peta Kuliner Indonesia</strong>
+    <div>
+      <button id="treemapClose" class="btn btn-sm btn-light">✕</button>
+    </div>
+  </header>
+  <div class="body">
+    <svg id="treemapSvg" width="100%" height="100%"></svg>
+  </div>
+</div>
+
+<!-- CRUD Modal (Bootstrap) -->
+<div class="modal fade" id="crudModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="crudForm">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title">Tambah / Edit Kuliner</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="editId">
+          <div class="mb-2">
+            <label class="form-label">Nama Makanan</label>
+            <input type="text" id="foodName" class="form-control" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Daerah</label>
+            <input type="text" id="foodRegion" class="form-control" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Jenis</label>
+            <input type="text" id="foodType" class="form-control" required placeholder="contoh: Street Food, Main Course">
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Koordinat (lat,lng)</label>
+            <div class="input-group">
+              <input type="text" id="foodCoords" class="form-control" placeholder="-6.2088,106.8456" required>
+              <button id="usePickedBtn" class="btn btn-outline-secondary" type="button" title="Gunakan koordinat yang dipilih di peta">Gunakan Pick</button>
+            </div>
+            <div class="small-note mt-1">Gunakan tombol <strong>Pick coords pada peta</strong> untuk memilih titik secara visual.</div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Catatan / Rekomendasi</label>
+            <textarea id="foodNote" class="form-control" rows="2"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-success">Simpan</button>
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Leaflet JS, D3, Bootstrap JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+/* =========================
+   Initial data (with id)
+   ========================= */
+const initialData = [
+  { id: 1, name: 'Rendang', region: 'Padang, Sumatera Barat', type: 'Main Course', coords: [-0.94708,100.41718], note: 'Rendang Padang klasik.' },
+  { id: 2, name: 'Sate Padang', region: 'Padang, Sumatera Barat', type: 'Street Food', coords: [-0.94708,100.41718], note: 'Kuah kental pedas.' },
+  { id: 3, name: 'Pempek', region: 'Palembang, Sumatera Selatan', type: 'Snack', coords: [-2.99093,104.75655], note: 'Pempek kapal selam.' },
+  { id: 4, name: 'Martabak Manis', region: 'Jakarta', type: 'Dessert', coords: [-6.20876,106.8456], note: '' },
+  { id: 5, name: 'Gudeg', region: 'Yogyakarta', type: 'Main Course', coords: [-7.79558,110.36949], note: '' },
+  { id: 6, name: 'Ikan Bakar Jimbaran', region: 'Jimbaran, Bali', type: 'Main Course', coords: [-8.7890,115.1677], note: '' },
+  { id: 7, name: 'Bakso Malang', region: 'Malang, Jawa Timur', type: 'Street Food', coords: [-7.9797,112.6309], note: '' },
+  { id: 8, name: 'Papeda', region: 'Papua (Jayapura)', type: 'Main Course', coords: [-2.5330,140.7181], note: '' },
+  { id: 9, name: 'Soto Betawi', region: 'Jakarta', type: 'Soup', coords: [-6.20876,106.8456], note: '' },
+  { id: 10, name: 'Sate Madura', region: 'Madura / Surabaya', type: 'Street Food', coords: [-7.033,113.8846], note: '' }
+];
+
+const STORAGE_KEY = 'petaKulinerData_v1';
+
+/* load from storage or initial */
+let data = (function load(){
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw) return JSON.parse(raw);
+  } catch(e){ console.warn('localStorage read failed', e); }
+  return initialData.slice();
+})();
+
+function saveData(){
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch(e){ console.warn('localStorage save failed', e); }
+}
+
+/* =========================
+   Map setup
+   ========================= */
+const map = L.map('map', {center:[-2.5,118], zoom:5});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+/* icons */
+const iconBase = 'https://cdn.jsdelivr.net/gh/pointhi/leaflet-color-markers@master/img/';
+const colorMap = {
+  'Main Course': 'marker-icon-red.png',
+  'Street Food': 'marker-icon-orange.png',
+  'Snack': 'marker-icon-violet.png',
+  'Dessert': 'marker-icon-grey.png',
+  'Soup': 'marker-icon-blue.png',
+  'Salad': 'marker-icon-green.png',
+  'Noodle': 'marker-icon-yellow.png',
+  'Seafood': 'marker-icon-black.png',
+  'Side Dish': 'marker-icon-green.png'
+};
+function makeIcon(type){ const file = colorMap[type] || 'marker-icon-red.png'; return L.icon({ iconUrl: iconBase + file, iconSize: [25,41], iconAnchor: [12,41], popupAnchor: [1,-34], shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png' }); }
+
+/* marker storage */
+const markersById = {};
+const markerGroup = L.layerGroup().addTo(map);
+
+/* temp pick marker */
+let pickMode = false;
+let tempPickMarker = null;
+let lastPickedCoords = null;
+
+/* Add markers from list */
+function addMarkers(list){
+  markerGroup.clearLayers();
+  Object.keys(markersById).forEach(k=>delete markersById[k]);
+  list.forEach(item=>{
+    const m = L.marker(item.coords, {icon: makeIcon(item.type)});
+    const html = `
+      <div style="min-width:200px">
+        <strong>${escapeHtml(item.name)}</strong><br>
+        <em>${escapeHtml(item.region)}</em><br>
+        <small>${escapeHtml(item.type)}</small><br>
+        <p style="margin:6px 0 6px 0;font-size:0.9rem">${escapeHtml(item.note||'')}</p>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-warning" onclick="editItem(${item.id})">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteItem(${item.id})">Hapus</button>
+        </div>
+      </div>
+    `;
+    m.bindPopup(html, {maxWidth: 300});
+    m.addTo(markerGroup);
+    markersById[item.id] = m;
+  });
+}
+
+/* initial render */
+addMarkers(data);
+
+/* fit bounds initially */
+if(data.length) map.fitBounds(data.map(d=>d.coords), {padding:[50,50]});
+
+/* =========================
+   UI elements
+   ========================= */
+const searchEl = document.getElementById('search');
+const resultsEl = document.getElementById('results');
+const regionSelect = document.getElementById('regionSelect');
+const typeSelect = document.getElementById('typeSelect');
+const resetBtn = document.getElementById('resetBtn');
+const showAddBtn = document.getElementById('showAddBtn');
+const addFloating = document.getElementById('addFloating');
+const pickCoordsBtn = document.getElementById('pickCoordsBtn');
+const usePickedBtn = document.getElementById('usePickedBtn');
+const clearSearch = document.getElementById('clearSearch');
+const legendContainer = document.getElementById('legendContainer');
+
+/* populate selects and legend */
+function rebuildFiltersAndLegend(){
+  // regions and types
+  const regions = Array.from(new Set(data.map(d=>d.region))).sort();
+  const types = Array.from(new Set(data.map(d=>d.type))).sort();
+
+  // region
+  regionSelect.innerHTML = '<option value="">-- Semua Daerah --</option>';
+  regions.forEach(r => { const o=document.createElement('option'); o.value=r; o.textContent=r; regionSelect.appendChild(o); });
+
+  // type
+  typeSelect.innerHTML = '<option value="">-- Semua Jenis --</option>';
+  types.forEach(t => { const o=document.createElement('option'); o.value=t; o.textContent=t; typeSelect.appendChild(o); });
+
+  // legend
+  const typeColors = {};
+  types.forEach((t, i) => {
+    typeColors[t] = colorMap[t] ? null : null; // keep map for appearance
+  });
+  // build legend using our earlier mapping (typeColors constant-like)
+  legendContainer.innerHTML = '';
+  const box = document.createElement('div'); box.className='legend-box';
+  box.innerHTML = '<strong>Legenda</strong><br/>';
+  for(const [k,v] of Object.entries({
+    'Main Course':'#e53935','Street Food':'#fb8c00','Snack':'#8e24aa','Dessert':'#6d4c41','Soup':'#1e88e5','Salad':'#43a047','Noodle':'#fdd835','Seafood':'#00acc1','Side Dish':'#9e9e9e'
+  })) {
+    const row = document.createElement('div'); row.className='legend-row';
+    const sw = document.createElement('div'); sw.className='legend-swatch'; sw.style.background = v;
+    const lab = document.createElement('div'); lab.textContent = k; lab.style.fontSize='13px';
+    row.appendChild(sw); row.appendChild(lab); box.appendChild(row);
+  }
+  legendContainer.appendChild(box);
+}
+rebuildFiltersAndLegend();
+
+/* =========================
+   CRUD Modal logic
+   ========================= */
+const crudModalEl = document.getElementById('crudModal');
+const crudModal = new bootstrap.Modal(crudModalEl);
+const crudForm = document.getElementById('crudForm');
+const editIdField = document.getElementById('editId');
+
+showAddBtn.addEventListener('click', ()=>openAddModal());
+addFloating.addEventListener('click', ()=>openAddModal());
+
+function openAddModal(){
+  crudForm.reset();
+  editIdField.value = '';
+  lastPickedCoords = null;
+  if(tempPickMarker) { map.removeLayer(tempPickMarker); tempPickMarker = null; }
+  crudModal.show();
+}
+
+window.editItem = function(id){
+  const idx = data.findIndex(d=>d.id === id);
+  if(idx === -1) return alert('Item tidak ditemukan');
+  const it = data[idx];
+  document.getElementById('foodName').value = it.name;
+  document.getElementById('foodRegion').value = it.region;
+  document.getElementById('foodType').value = it.type;
+  document.getElementById('foodCoords').value = it.coords.join(',');
+  document.getElementById('foodNote').value = it.note || '';
+  editIdField.value = id;
+  crudModal.show();
+};
+
+window.deleteItem = function(id){
+  if(!confirm('Yakin ingin menghapus item ini?')) return;
+  const idx = data.findIndex(d=>d.id === id);
+  if(idx >= 0){
+    data.splice(idx,1);
+    saveData();
+    rebuildFiltersAndLegend();
+    addMarkers(data);
+  }
+};
+
+/* submit form */
+crudForm.addEventListener('submit', (e)=>{
+  e.preventDefault();
+  const name = document.getElementById('foodName').value.trim();
+  const region = document.getElementById('foodRegion').value.trim();
+  const type = document.getElementById('foodType').value.trim();
+  const coordsText = document.getElementById('foodCoords').value.trim();
+  const note = document.getElementById('foodNote').value.trim();
+
+  const parts = coordsText.split(',').map(s=>s.trim()).filter(Boolean);
+  if(parts.length !== 2 || isNaN(Number(parts[0])) || isNaN(Number(parts[1]))){
+    return alert('Koordinat harus format: lat,lng (contoh -6.2088,106.8456)');
+  }
+  const coords = [Number(parts[0]), Number(parts[1])];
+  const editingId = editIdField.value ? Number(editIdField.value) : null;
+
+  if(editingId){
+    const idx = data.findIndex(d=>d.id === editingId);
+    if(idx >= 0){
+      data[idx] = { id: editingId, name, region, type, coords, note };
+    }
+  } else {
+    // create new id (unique)
+    const newId = Date.now();
+    data.push({ id: newId, name, region, type, coords, note });
+  }
+  saveData();
+  rebuildFiltersAndLegend();
+  addMarkers(data);
+  crudModal.hide();
+});
+
+/* =========================
+   Search & Filters
+   ========================= */
+searchEl.addEventListener('input', ()=>{
+  const q = searchEl.value.trim().toLowerCase();
+  resultsEl.innerHTML = '';
+  if(!q) return;
+  const hits = data.filter(d => d.name.toLowerCase().includes(q) || d.region.toLowerCase().includes(q) || d.type.toLowerCase().includes(q));
+  hits.slice(0,40).forEach(h=>{
+    const div = document.createElement('div'); div.className='result-item';
+    div.innerHTML = `<strong>${escapeHtml(h.name)}</strong><br><small>${escapeHtml(h.region)} — ${escapeHtml(h.type)}</small>`;
+    div.addEventListener('click', ()=>{
+      map.setView(h.coords, 12);
+      const m = markersById[h.id];
+      if(m) m.openPopup();
+      resultsEl.innerHTML=''; searchEl.value='';
+    });
+    resultsEl.appendChild(div);
+  });
+});
+
+clearSearch.addEventListener('click', ()=>{ searchEl.value=''; resultsEl.innerHTML=''; });
+
+regionSelect.addEventListener('change', applyFilters);
+typeSelect.addEventListener('change', applyFilters);
+
+function applyFilters(){
+  const r = regionSelect.value;
+  const t = typeSelect.value;
+  const filtered = data.filter(d => (r? d.region===r:true) && (t? d.type===t:true));
+  addMarkers(filtered);
+  if(filtered.length) map.fitBounds(filtered.map(f=>f.coords), {padding:[40,40]});
+}
+
+/* reset */
+resetBtn.addEventListener('click', ()=>{
+  regionSelect.value=''; typeSelect.value=''; addMarkers(data); if(data.length) map.fitBounds(data.map(d=>d.coords), {padding:[50,50]});
+});
+
+/* =========================
+   Pick coords on map
+   ========================= */
+pickCoordsBtn.addEventListener('click', ()=>{
+  pickMode = !pickMode;
+  pickCoordsBtn.classList.toggle('btn-outline-primary', !pickMode);
+  pickCoordsBtn.classList.toggle('btn-primary', pickMode);
+  pickCoordsBtn.textContent = pickMode ? 'Klik peta untuk pilih titik (klik lagi untuk batal)' : 'Pick coords pada peta';
+  if(!pickMode && tempPickMarker){ map.removeLayer(tempPickMarker); tempPickMarker=null; lastPickedCoords=null; }
+});
+
+map.on('click', (e)=>{
+  // when picking coordinates
+  if(pickMode){
+    if(tempPickMarker) map.removeLayer(tempPickMarker);
+    tempPickMarker = L.marker(e.latlng, {opacity:0.9}).addTo(map);
+    lastPickedCoords = [e.latlng.lat, e.latlng.lng];
+    // update form input if modal open
+    const coordsInput = document.getElementById('foodCoords');
+    if(coordsInput) coordsInput.value = `${lastPickedCoords[0].toFixed(6)},${lastPickedCoords[1].toFixed(6)}`;
+    // switch off pick mode (optional)
+    // pickMode = false;
+    // pickCoordsBtn.click();
+    return;
+  }
+  // normal click => clear results
+  resultsEl.innerHTML=''; searchEl.value='';
+});
+
+/* use picked coords button */
+usePickedBtn.addEventListener('click', ()=>{
+  if(!lastPickedCoords) return alert('Belum ada koordinat yang dipilih di peta. Gunakan tombol "Pick coords pada peta" lalu klik peta.');
+  document.getElementById('foodCoords').value = `${lastPickedCoords[0].toFixed(6)},${lastPickedCoords[1].toFixed(6)}`;
+});
+
+/* =========================
+   Treemap (D3)  
+   ========================= */
+function buildTreemap(){
+  const grouped = {};
+  data.forEach(d=>{
+    if(!grouped[d.region]) grouped[d.region]=[];
+    grouped[d.region].push({name:d.name, value:1, id:d.id});
+  });
+  const root = { name:'Indonesia', children: Object.keys(grouped).map(region=>({ name:region, children: grouped[region] })) };
+
+  const svg = d3.select('#treemapSvg');
+  svg.selectAll('*').remove();
+  const width = document.querySelector('#treemapModal .body').clientWidth;
+  const height = document.querySelector('#treemapModal .body').clientHeight;
+  svg.attr('viewBox', `0 0 ${width} ${height}`);
+  const treemapLayout = d3.treemap().size([width, height]).paddingInner(2);
+  const rootNode = d3.hierarchy(root).sum(d=>d.value);
+  treemapLayout(rootNode);
+
+  const nodes = svg.selectAll('g').data(rootNode.leaves()).enter().append('g').attr('transform', d => `translate(${d.x0},${d.y0})`);
+
+  nodes.append('rect')
+    .attr('width', d => Math.max(0,d.x1-d.x0))
+    .attr('height', d => Math.max(0,d.y1-d.y0))
+    .attr('fill', d => `hsl(${(d.parent.data.name.length * 37) % 360},70%,60%)`)
+    .attr('stroke', '#ffffff')
+    .style('cursor','pointer')
+    .on('click', (event, d)=>{
+      const id = d.data.id;
+      const item = data.find(x=>x.id === id);
+      if(item){
+        map.setView(item.coords, 12);
+        const m = markersById[item.id];
+        if(m) m.openPopup();
+        closeTreemap();
+      }
+    });
+
+  nodes.append('text')
+    .attr('x',4).attr('y',14)
+    .style('font-size','12px')
+    .style('pointer-events','none')
+    .text(d => d.data.name);
+}
+
+/* treemap modal handlers */
+const treemapModal = document.getElementById('treemapModal');
+const treemapBtn = document.getElementById('treemapBtn');
+const treemapClose = document.getElementById('treemapClose');
+function openTreemap(){ treemapModal.style.display='block'; treemapModal.setAttribute('aria-hidden','false'); buildTreemap(); }
+function closeTreemap(){ treemapModal.style.display='none'; treemapModal.setAttribute('aria-hidden','true'); }
+treemapBtn.addEventListener('click', openTreemap);
+treemapClose.addEventListener('click', closeTreemap);
+window.addEventListener('keydown', (e)=>{ if(e.key === "Escape") closeTreemap(); });
+window.addEventListener('click', (e)=>{ if(e.target === treemapModal) closeTreemap(); });
+
+/* =========================
+   Utilities
+   ========================= */
+function escapeHtml(unsafe) {
+  if(!unsafe) return '';
+  return String(unsafe).replace(/[&<>"'`=\/]/g, function(s) {
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;",'/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[s]);
+  });
+}
+
+/* rebuild UI when load changed */
+rebuildFiltersAndLegend();
+addMarkers(data);
+
+/* Save on unload */
+window.addEventListener('beforeunload', ()=>{ saveData(); });
+
+</script>
+</body>
+</html>
